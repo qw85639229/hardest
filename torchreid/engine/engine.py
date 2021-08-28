@@ -22,7 +22,7 @@ from torchreid.utils import AverageMeter, visualize_ranked_results, save_checkpo
 from torchreid.losses import DeepSupervision
 from torchreid import metrics
 
-
+from collections import defaultdict
 GRID_SPACING = 10
 VECT_HEIGTH = 10
 
@@ -87,6 +87,7 @@ class Engine(object):
             visactmap (bool, optional): visualizes activation maps. Default is False.
         """
         trainloader, testloader = self.datamanager.return_dataloaders()
+        pre_trainloader = self.datamanager.return_pretrain_loader()
 
         if visrank and not test_only:
             raise ValueError('visrank=True is valid only if test_only=True')
@@ -135,6 +136,8 @@ class Engine(object):
         print('=> Start training')
 
         for epoch in range(start_epoch, max_epoch):
+            imgIDrelations = self._return_imgIDrelations(pre_trainloader)
+            trainloader = self.datamanager.reset_train_loader(imgIDrelations)
             self.train(epoch, max_epoch, trainloader, fixbase_epoch, open_layers, print_freq)
             
             if (epoch+1)>=start_eval and eval_freq>0 and (epoch+1)%eval_freq==0 and (epoch+1)!=max_epoch:
@@ -240,6 +243,44 @@ class Engine(object):
             )
         
         return rank1
+
+    @torch.no_grad()
+    def _return_imgIDrelations(self, pre_trainloader, dist_metric='euclidean', normalize_feature=False, visrank=False, visrankactiv = False,
+                  visrank_topk=10, save_dir='', use_metric_cuhk03=False, ranks=[1, 5, 10, 20],
+                  rerank=False, visrankactivthr = False, maskthr=0.7, visdrop=False, visdroptype='random'):
+        qf = []
+        q_pids = []
+        for _, data in enumerate(pre_trainloader):
+            imgs, pids, camids = self._parse_data_for_eval(data)
+            if self.use_gpu:
+                imgs = imgs.cuda()
+            features = self._extract_features(imgs)
+            features = features.data.cpu()
+            qf.append(features)
+            q_pids.extend(pids)
+        qf = torch.cat(qf, 0)
+        q_pids = np.asarray(q_pids)
+        print(q_pids)
+        q_pids = torch.from_numpy(q_pids)
+        n = qf.size(0)
+        dist = torch.pow(qf, 2).sum(dim=1, keepdim=True).expand(n, n)
+        dist = dist + dist.t()
+        dist.addmm_(1, -2, qf, qf.t())
+        dist = dist.clamp(min=1e-12).sqrt()  # for numerical stability
+        mask = q_pids.expand(n, n).eq(q_pids.expand(n, n).t())
+        imgIDrelations = defaultdict(list)
+        for i in range(n):
+            apID = dist[i][mask[i]].argmax()
+            apID = (mask[i] == 1).nonzero(as_tuple=True)[0][apID] #instance level ap
+            imgIDrelations[i].append(int(apID))
+
+            anID = dist[i][mask[i] == 0].argmax()
+            anID = (mask[i] == 0).nonzero(as_tuple=True)[0][anID] #instance level an 
+            #anID = q_pids[anID] # identity level an pid
+            imgIDrelations[i].append(int(anID))
+        # assert 0, imgIDrelations
+        return imgIDrelations
+
 
     @torch.no_grad()
     def _evaluate(self, epoch, dataset_name='', queryloader=None, galleryloader=None,

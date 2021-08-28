@@ -74,6 +74,33 @@ class DataManager(object):
         """
         return self.testdataset[name]['query'], self.testdataset[name]['gallery']
 
+    def reset_train_loader(self, imgIDrelations):
+        # self.trainset = trainset
+        # self.batch_size_train = batch_size_train
+        # self.num_instances = num_instances
+        # self.workers = workers
+        train_sampler = build_train_sampler(
+            self.trainset.train, 'RandomIdentitySamplerHardest',
+            batch_size=self.batch_size_train,
+            num_instances=self.num_instances,
+            imgIDrelations=imgIDrelations
+        )
+
+        self.trainloader = torch.utils.data.DataLoader(
+            self.trainset,
+            sampler=train_sampler,
+            batch_size=self.batch_size_train,
+            shuffle=False,
+            num_workers=self.workers,
+            pin_memory=self.use_gpu,
+            drop_last=True
+        )
+
+        return self.trainloader
+
+    def return_pretrain_loader(self):
+        return self.pre_trainloader
+
 
 class ImageDataManager(DataManager):
     r"""Image data manager.
@@ -163,6 +190,39 @@ class ImageDataManager(DataManager):
             pin_memory=self.use_gpu,
             drop_last=True
         )
+        """
+        add the paprameter for the reset pre trainloader
+        """
+        self.trainset = trainset
+        self.batch_size_train = batch_size_train
+        self.num_instances = num_instances
+        self.workers = workers
+
+        pre_trainset = []
+        
+        for name in self.sources:
+            pre_trainset_ = init_image_dataset(
+                name,
+                transform=self.transform_te,
+                mode='train',
+                combineall=combineall,
+                root=root,
+                split_id=split_id,
+                cuhk03_labeled=cuhk03_labeled,
+                cuhk03_classic_split=cuhk03_classic_split,
+                market1501_500k=market1501_500k
+            )
+            pre_trainset.append(pre_trainset_)
+        pre_trainset = sum(pre_trainset)
+        self.pre_trainloader = torch.utils.data.DataLoader(
+            pre_trainset,
+            batch_size=batch_size_train,
+            shuffle=False,
+            num_workers=workers,
+            pin_memory=self.use_gpu,
+            drop_last=False
+        )
+
 
         print('=> Loading test (target) dataset')
         self.testloader = {name: {'query': None, 'gallery': None} for name in self.targets}
